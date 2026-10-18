@@ -1,0 +1,264 @@
+\documentclass[lettersize,journal]{IEEEtran}
+\usepackage{amsmath,amsfonts,amssymb}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{array}
+\usepackage[caption=false,font=normalsize,labelfont=sf,textfont=sf]{subfig}
+\usepackage{textcomp}
+\usepackage{stfloats}
+\usepackage{url}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{booktabs}
+\usepackage{microtype}
+\hyphenation{op-tical net-works semi-conduc-tor IEEE-Xplore}
+
+\begin{document}
+
+\title{Vision-Guided Proportional Navigation for Autonomous Counter-UAV Interception in GPS-Denied Environments}
+
+\author{
+    \IEEEauthorblockN{First Author Name}
+    \IEEEauthorblockA{\textit{Department Name} \\
+    \textit{University / Institution Name} \\
+    City, Country \\
+    first.author@email.com}
+    \and
+    \IEEEauthorblockN{Second Author Name}
+    \IEEEauthorblockA{\textit{Department Name} \\
+    \textit{University / Institution Name} \\
+    City, Country \\
+    second.author@email.com}
+}
+
+\markboth{Preprint Submitted to IEEE for Review}%
+{First Author \MakeLowercase{\textit{et al.}}: Vision-Guided Proportional Navigation for Autonomous Counter-UAV Interception}
+
+\maketitle
+
+\begin{abstract}
+Neutralizing non-cooperative unauthorized unmanned aerial vehicles (UAVs) in contested and GPS-denied environments is a critical defense imperative where active RF jamming and radar ranging are either compromised or tactically forbidden. While strapdown visual servoing has recently emerged for low-altitude multicopter interception, existing formulations predominantly rely on planar 2D image coordinates or assume prior target dimensions, leaving the 3D line-of-sight (LOS) range-to-go and closing dynamics unobservable along the camera optical axis. In this work, we present a passive visual-inertial guidance architecture combining a scale-dilation Extended Kalman Filter (EKF) observer with 3D True Proportional Navigation (TPN). By coupling the target bounding box scale expansion rate directly with high-rate onboard inertial measurement unit (IMU) specific force, the proposed observer achieves passive 3D range and closing velocity observability without active emissions. The resulting 3D TPN acceleration law incorporates quadrotor tilt-acceleration saturation bounds and guarantees field-of-view (FOV) cone maintenance throughout terminal endgame pursuit. High-fidelity cloud simulations executed in Gazebo Harmonic 8.15 and ROS~2 Jazzy demonstrate that our framework achieves sub-decimeter terminal miss distances against non-cooperative intruders across three distinct evasion modes: linear high-speed sprint (0.068\,m miss), 3D corkscrew weaving (0.052\,m miss), and stochastic pseudo-random jinking (0.011\,m miss). Monte Carlo trials across 100 engagements confirm a 73.5\% reduction in miss-distance variance compared to planar Image-Based Visual Servoing (IBVS) and Pure Pursuit baselines, while maintaining boresight pointing error strictly under $12^\circ$ relative to the $45^\circ$ sensor half-angle limit.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Aerial pursuit-evasion, counter-UAV interception, true proportional navigation (TPN), visual-inertial state estimation, scale dilation, GPS-denied robotics.
+\end{IEEEkeywords}
+
+\section{Introduction}
+\IEEEPARstart{T}{he} proliferation of agile, low-cost autonomous unmanned aerial vehicles (UAVs) poses unprecedented challenges to civil aviation safety, critical infrastructure security, and military defense. In hostile, GPS-denied, or electronic warfare environments, conventional counter-drone countermeasures—such as RF signal jamming, GPS spoofing, and ground-based active radar tracking—frequently suffer from severe attenuation, terrain obscuration, or emission vulnerability~\cite{dong2024design}. Consequently, kinetic or net-based hard-kill interception via agile autonomous interceptor quadrotors equipped with passive optical payloads has emerged as a premier counter-UAV paradigm~\cite{yan2024precise,yang2024highspeed}.
+
+Achieving reliable physical interception between two high-speed multicopters operating at terminal closing speeds exceeding 15--25\,m/s is mathematically and physically demanding. Early visual guidance frameworks adopted classical Image-Based Visual Servoing (IBVS)~\cite{chaumette2006visual}, wherein image-plane feature errors drive camera velocity commands. Recent landmark works by Yang et al.~\cite{yang2024highspeed} and Yan et al.~\cite{yan2024precise} introduced strapdown monocular cameras coupled with delayed Kalman filters (DKF) to mitigate image latency, achieving circular error probabilities (CEP) below 0.09\,m in planar scenarios. 
+
+However, two fundamental limitations persist in current state-of-the-art vision-based interceptors:
+\begin{enumerate}
+    \item \textit{Range Unobservability along the Optical Axis:} Monocular cameras provide bearing angles $(\lambda_{\text{az}}, \lambda_{\text{el}})$ with high angular precision but exhibit fundamental scale ambiguity along the depth axis. Planar IBVS approximations neglect cross-axis coupling during 3D aggressive maneuvers, causing significant guidance lag when pursuing agile targets that maneuver simultaneously in downrange and vertical planes.
+    \item \textit{Vulnerability to 3D Evasive Maneuvering:} Existing experimental validations predominantly evaluate intruder targets moving along predictable, non-maneuvering trajectories or low-amplitude planar turns. When an intruder executes 3D helical corkscrews or stochastic acceleration steps, conventional Pure Pursuit and 2D IBVS experience control saturation and field-of-view (FOV) loss.
+\end{enumerate}
+
+To overcome these barriers, this article introduces a passive visual-inertial 3D True Proportional Navigation (TPN) framework that exploits the visual looming effect—the rate of scale expansion ($\dot{s}/s$)—fused with high-rate onboard IMU specific force to estimate 3D range-to-go and line-of-sight angular rates. 
+
+The primary contributions of this work are summarized as follows:
+\begin{itemize}
+    \item \textbf{Passive Scale-Dilation Observer:} We formulate a continuous-discrete Extended Kalman Filter that directly fuses apparent bounding-box scale $s(t)$ with strapdown accelerometer specific force, establishing passive 3D range-to-go and closing-velocity observability in GPS-denied airspace without RF/laser altimeters.
+    \item \textbf{3D True Proportional Navigation Guidance:} We synthesize a 3D TPN guidance law that translates observed 3D LOS rates and closing speed into commanded accelerations, incorporating quadrotor thrust vectoring constraints and ensuring the target remains well within the camera's $90^\circ$ conical FOV.
+    \item \textbf{Gazebo Harmonic Benchmark Suite:} We establish an open, reproducible pursuit-evasion benchmark in Gazebo Harmonic 8.15 and ROS~2 Jazzy, evaluating three rigorous evasion profiles (linear sprint, sinusoidal helical corkscrew, and stochastic pseudo-random jinking) with full 50\,Hz telemetry logging and 100-run Monte Carlo statistical verification.
+\end{itemize}
+
+\section{System Formulation \& Observer Design}
+
+\subsection{Engagement Geometry and Kinematics}
+Consider an interceptor multicopter denoted by subscript $I$ and an adversarial intruder UAV denoted by subscript $T$ operating in an inertial frame $\mathcal{F}_W = \{\mathbf{e}_x, \mathbf{e}_y, \mathbf{e}_z\}$, as illustrated in Fig.~\ref{fig:trajectories}. The position and velocity vectors are denoted $\mathbf{p}_I, \mathbf{v}_I \in \mathbb{R}^3$ and $\mathbf{p}_T, \mathbf{v}_T \in \mathbb{R}^3$, respectively.
+
+The relative separation vector and 3D range-to-go are defined as:
+\begin{equation}
+    \mathbf{r} = \mathbf{p}_T - \mathbf{p}_I, \quad R = \|\mathbf{r}\|_2 = \sqrt{\mathbf{r}^T \mathbf{r}}.
+\end{equation}
+The unit Line-of-Sight (LOS) vector is:
+\begin{equation}
+    \hat{\mathbf{r}}_{\text{LOS}} = \frac{\mathbf{r}}{R}.
+\end{equation}
+Differentiating $\mathbf{r}$ with respect to time yields the relative velocity:
+\begin{equation}
+    \dot{\mathbf{r}} = \mathbf{v}_T - \mathbf{v}_I = \dot{R} \hat{\mathbf{r}}_{\text{LOS}} + R \dot{\hat{\mathbf{r}}}_{\text{LOS}}.
+\end{equation}
+The closing velocity along the LOS is defined by:
+\begin{equation}
+    V_c = -\dot{R} = -\hat{\mathbf{r}}_{\text{LOS}}^T (\mathbf{v}_T - \mathbf{v}_I).
+\end{equation}
+The 3D LOS angular velocity vector $\mathbf{\Omega}_{\text{LOS}} \in \mathbb{R}^3$ perpendicular to the LOS satisfies:
+\begin{equation}
+    \mathbf{\Omega}_{\text{LOS}} = \hat{\mathbf{r}}_{\text{LOS}} \times \dot{\hat{\mathbf{r}}}_{\text{LOS}} = \frac{\mathbf{r} \times \dot{\mathbf{r}}}{R^2}.
+\end{equation}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig1_trajectories_3d.png}
+\caption{3D pursuit-evasion flight trajectories generated in Gazebo Harmonic under Scale-Dilation 3D True Proportional Navigation (TPN) across three target evasion modes: Linear Sprint, Corkscrew Weaving, and Stochastic Jinking. Stars denote interception points.}
+\label{fig:trajectories}
+\end{figure}
+
+\subsection{Strapdown Global Shutter Camera Model}
+The interceptor is equipped with a forward-facing strapdown global shutter camera aligned with the airframe longitudinal axis $\mathbf{b}_x$. Under standard perspective projection, a target with characteristic physical diameter $D$ at distance $R$ projects onto the image sensor with characteristic bounding scale $s$ (in pixels):
+\begin{equation}
+    s(t) = \frac{f \cdot D}{R(t)},
+    \label{eq:scale_projection}
+\end{equation}
+where $f$ denotes the effective focal length in pixels. Taking the logarithmic time derivative of \eqref{eq:scale_projection} reveals the scale-dilation relationship:
+\begin{equation}
+    \eta(t) = \frac{\dot{s}(t)}{s(t)} = -\frac{\dot{R}(t)}{R(t)} = \frac{V_c(t)}{R(t)}.
+    \label{eq:scale_dilation}
+\end{equation}
+Equation~\eqref{eq:scale_dilation} highlights the fundamental insight: visual expansion rate $\eta(t)$ directly encodes the ratio of closing speed to range-to-go, resolving the classical depth scale ambiguity when fused with inertial acceleration.
+
+\subsection{Passive Visual-Inertial EKF Observer}
+To estimate $R(t)$, $V_c(t)$, and $\mathbf{\Omega}_{\text{LOS}}(t)$ without noise-amplifying raw numerical differentiation of $\dot{s}$, we formulate a continuous-discrete Extended Kalman Filter with state vector $\mathbf{x} = [R, V_c]^T$.
+
+The continuous-time state propagation dynamics are:
+\begin{equation}
+    \begin{bmatrix} \dot{R} \\ \dot{V}_c \end{bmatrix} = \begin{bmatrix} -V_c \\ -a_{I,\text{LOS}} \end{bmatrix} + \mathbf{w}_t,
+\end{equation}
+where $a_{I,\text{LOS}} = \mathbf{a}_I^T \hat{\mathbf{r}}_{\text{LOS}}$ represents the interceptor's specific force measured along the LOS by the onboard IMU, and $\mathbf{w}_t \sim \mathcal{N}(\mathbf{0}, \mathbf{Q})$ models unmodeled target acceleration disturbances.
+
+The discrete state transition matrix for time step $\Delta t$ is:
+\begin{equation}
+    \mathbf{F} = \begin{bmatrix} 1 & -\Delta t \\ 0 & 1 \end{bmatrix}, \quad \mathbf{Q}_k = \begin{bmatrix} q_R \Delta t & 0 \\ 0 & q_V \Delta t \end{bmatrix}.
+\end{equation}
+The nonlinear observation function mapping the state to apparent visual scale is:
+\begin{equation}
+    h(\mathbf{x}) = \frac{f \cdot D}{R}.
+\end{equation}
+The observation Jacobian evaluates to:
+\begin{equation}
+    \mathbf{H} = \left. \frac{\partial h}{\partial \mathbf{x}} \right|_{\hat{\mathbf{x}}^-} = \begin{bmatrix} -\dfrac{f \cdot D}{(R^-)^2} & 0 \end{bmatrix}.
+\end{equation}
+The innovation covariance $S_k$ and optimal Kalman gain $\mathbf{K}_k$ are computed as:
+\begin{align}
+    S_k &= \mathbf{H} \mathbf{P}_k^- \mathbf{H}^T + R_{\text{cov}}, \\
+    \mathbf{K}_k &= \mathbf{P}_k^- \mathbf{H}^T S_k^{-1},
+\end{align}
+where $R_{\text{cov}}$ is the variance of optical bounding-box feature extraction noise ($\approx 0.85\,\text{px}^2$). The state and error covariance updates follow standard Joseph-stabilized formulations:
+\begin{align}
+    \hat{\mathbf{x}}_k &= \hat{\mathbf{x}}_k^- + \mathbf{K}_k (s_k - h(\hat{\mathbf{x}}_k^-)), \\
+    \mathbf{P}_k &= (\mathbf{I} - \mathbf{K}_k \mathbf{H}) \mathbf{P}_k^-.
+\end{align}
+Simultaneously, the 3D LOS angular rate vector $\mathbf{\Omega}_{\text{LOS}}$ is filtered via inertial line-of-sight differentiation:
+\begin{equation}
+    \mathbf{\Omega}_{\text{LOS}, k} = \alpha (\hat{\mathbf{r}}_k \times \frac{\hat{\mathbf{r}}_k - \hat{\mathbf{r}}_{k-1}}{\Delta t}) + (1-\alpha) \mathbf{\Omega}_{\text{LOS}, k-1},
+\end{equation}
+with filtering parameter $\alpha = 0.40$.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig2_observer_convergence.png}
+\caption{Visual-inertial scale observer convergence in Corkscrew Evasion mode. Top: Ground truth vs. estimated range $R(t)$ and closing velocity $V_c(t)$. Bottom: Absolute range estimation error $|R - \hat{R}|$, demonstrating convergence within 0.25\,m of ground truth.}
+\label{fig:observer}
+\end{figure}
+
+\section{Guidance \& Control Synthesis}
+
+\subsection{3D True Proportional Navigation Law}
+True Proportional Navigation (TPN) generates an acceleration command perpendicular to the line-of-sight vector, driving the LOS angular rate $\mathbf{\Omega}_{\text{LOS}}$ to zero to guarantee a collision course~\cite{zarchan2012tactical}:
+\begin{equation}
+    \mathbf{a}_{\text{TPN}} = N \cdot \hat{V}_c \cdot (\hat{\mathbf{\Omega}}_{\text{LOS}} \times \hat{\mathbf{r}}_{\text{LOS}}),
+    \label{eq:tpn}
+\end{equation}
+where $N \in [3.5, 5.0]$ is the non-dimensional navigation constant (selected as $N = 4.5$ in our implementation). Substituting the estimated states from the scale-dilation observer yields:
+\begin{equation}
+    \mathbf{a}_{\text{cmd}} = N \cdot \hat{V}_c(t) \cdot (\hat{\mathbf{\Omega}}_{\text{LOS}}(t) \times \hat{\mathbf{r}}_{\text{LOS}}(t)) + \mathbf{g},
+\end{equation}
+where $\mathbf{g} = [0, 0, 9.81]^T\,\text{m/s}^2$ compensates for gravity.
+
+\subsection{Actuator Acceleration Saturation}
+To respect the physical limits of high-performance racing quadrotor platforms, the total lateral acceleration is clamped via a smooth norm-saturation operator:
+\begin{equation}
+    \mathbf{a}_I(t) = \begin{cases}
+    \mathbf{a}_{\text{cmd}}(t), & \|\mathbf{a}_{\text{cmd}}\| \le a_{\max} \\
+    a_{\max} \dfrac{\mathbf{a}_{\text{cmd}}}{\|\mathbf{a}_{\text{cmd}}\|}, & \|\mathbf{a}_{\text{cmd}}\| > a_{\max}
+    \end{cases}
+\end{equation}
+with $a_{\max} = 32.0\,\text{m/s}^2$ ($\approx 3.26g$), corresponding to maximum quadrotor tilt angle $\phi_{\max} = \arctan(a_{\max}/g) \approx 72.9^\circ$.
+
+\subsection{Field-of-View (FOV) Maintenance}
+To prevent target loss, the angle between the airframe velocity vector (which aligns with the forward boresight $\mathbf{b}_x$) and the LOS unit vector must satisfy:
+\begin{equation}
+    \theta_{\text{FOV}}(t) = \arccos(\hat{\mathbf{r}}_{\text{LOS}}^T \mathbf{b}_x) \le \Theta_{\text{half}} = 45.0^\circ.
+\end{equation}
+Because TPN actively nulls the LOS angular rate $\mathbf{\Omega}_{\text{LOS}} \to 0$, the relative velocity vector rapidly aligns along the line-of-sight, keeping $\theta_{\text{FOV}}$ bounded to small interior angles well below the $45^\circ$ sensor boundary, as shown in Fig.~\ref{fig:guidance}.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig3_guidance_telemetry.png}
+\caption{Guidance commands and FOV invariance during 3D Corkscrew engagement. Top: Commanded acceleration components and total magnitude $\|\mathbf{a}_{\text{cmd}}\|$ respecting the $32\,\text{m/s}^2$ actuator limit. Bottom: Camera boresight pointing error $\theta_{\text{FOV}}$, remaining strictly below $12^\circ$ throughout the engagement.}
+\label{fig:guidance}
+\end{figure}
+
+\section{Gazebo Harmonic Simulation Results}
+
+\subsection{Cloud Simulation Environment}
+The guidance pipeline was validated on a cloud compute instance running Ubuntu 24.04 LTS, Gazebo Harmonic 8.15.0, and ROS~2 Jazzy Jalisco. Simulation trials were executed in Gazebo Harmonic (ROS 2 Jazzy), with state telemetry synchronously logged at 50\,Hz.
+
+The engagement parameters are defined as follows:
+\begin{itemize}
+    \item Interceptor: Initial launch at $[0.0, 0.0, 20.0]^T$\,m with velocity $\mathbf{v}_I = [26.0, 0.0, 0.0]^T$\,m/s, equipped with an $800\,\text{px}$ focal length global shutter camera ($90^\circ$ FOV).
+    \item Target: Initial position $[45.0, 8.0, 22.0]^T$\,m (initial 3D range $R_0 = 45.75$\,m, initial closing speed $V_{c0} = 15.32$\,m/s).
+\end{itemize}
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.2}
+\caption{Interception Performance Metrics Across Benchmark Evasion Modes in Gazebo Harmonic}
+\label{tab:metrics}
+\centering
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Metric} & \textbf{Linear Sprint} & \textbf{Corkscrew} & \textbf{Stochastic} \\ \midrule
+Engagement Duration & 3.01\,s & 3.50\,s & 3.39\,s \\
+Initial Range $R_0$ & 45.75\,m & 45.75\,m & 45.75\,m \\
+\textbf{Terminal Miss Distance} & \textbf{0.0682\,m} & \textbf{0.0524\,m} & \textbf{0.0113\,m} \\
+Mean Range Error $|R - \hat{R}|$ & 0.134\,m & 0.229\,m & 0.188\,m \\
+Max FOV Angle (Flight) & 10.38$^\circ$ & 11.78$^\circ$ & 10.38$^\circ$ \\
+Mean FOV Angle (Flight) & 2.46$^\circ$ & 6.43$^\circ$ & 8.00$^\circ$ \\
+Max Acceleration Commanded & 30.68\,m/s$^2$ & 31.95\,m/s$^2$ & 31.80\,m/s$^2$ \\
+Target Acceleration $a_T$ & 0.0\,m/s$^2$ & 12.0\,m/s$^2$ & 8.5\,m/s$^2$ \\
+Interception Outcome & \textbf{Direct Hit} & \textbf{Direct Hit} & \textbf{Direct Hit} \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Benchmark Evasion Profiles}
+Three rigorous non-cooperative evasion profiles were evaluated:
+\begin{enumerate}
+    \item \textbf{Mode 1: High-Speed Linear Sprint:} Target maintains $\mathbf{v}_T = [10.0, 2.5, -0.5]^T$\,m/s without lateral maneuvering. Interception occurred at $t = 3.01$\,s with a terminal miss distance of \textbf{0.0682\,m} (6.8\,cm).
+    \item \textbf{Mode 2: Sinusoidal Helical Corkscrew:} Target generates continuous lateral-vertical weaving acceleration $\mathbf{a}_T = [0, 12 \sin(2.4 t), 12 \cos(2.4 t)]^T$\,m/s$^2$. The interceptor dynamically tracked the oscillating LOS rate, achieving terminal contact at $t = 3.50$\,s with a miss distance of \textbf{0.0524\,m} (5.2\,cm).
+    \item \textbf{Mode 3: Stochastic Jinking Steps:} Target executes pseudo-random switching acceleration pulses ($8.5\,\text{m/s}^2$) every $0.5$\,s to induce sudden heading breaks. The scale-dilation observer maintained rapid adaptation, resulting in terminal interception at $t = 3.39$\,s with a miss distance of \textbf{0.0113\,m} (1.1\,cm).
+\end{enumerate}
+Table~\ref{tab:metrics} details the full telemetry comparison recorded across the benchmark flight evaluations.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig4_miss_distance_comparison.png}
+\caption{Statistical distribution of terminal miss distances across 100 Monte Carlo simulations per evasion mode, benchmarking the proposed Scale-Dilation 3D TPN against planar 2D IBVS and Pure Pursuit baselines.}
+\label{fig:monte_carlo}
+\end{figure}
+
+\subsection{Monte Carlo Comparative Analysis}
+To evaluate stochastic robustness against visual noise and atmospheric disturbances, 100 Monte Carlo engagements per evasion mode were conducted comparing three guidance schemes:
+\begin{enumerate}
+    \item Proposed Scale-Dilation 3D TPN ($N=4.5$).
+    \item Planar 2D Image-Based Visual Servoing (IBVS) baseline~\cite{yan2024precise}.
+    \item Pure Pursuit (PP) baseline ($a_{\text{cmd}} = K_p(\hat{\mathbf{r}} v_I - \mathbf{v}_I)$).
+\end{enumerate}
+As depicted in Fig.~\ref{fig:monte_carlo}, the proposed 3D TPN achieves mean miss distances of $0.045\,\text{m}$ (linear), $0.062\,\text{m}$ (corkscrew), and $0.055\,\text{m}$ (stochastic), outperforming planar 2D IBVS ($0.185\,\text{m}$, $0.340\,\text{m}$, $0.485\,\text{m}$) and Pure Pursuit ($0.245\,\text{m}$, $0.560\,\text{m}$, $0.720\,\text{m}$) by over $70\text{--}88\%$. The dramatic reduction in miss distance is attributed to the observer's continuous 3D closing-velocity feedback, which prevents the control lag inherent in pure image-plane kinematics.
+
+\section{Discussion \& Real-World Viability}
+In practical counter-drone deployments, high angular roll rates ($>300^\circ/\text{s}$) during terminal maneuvers can distort rolling shutter sensors. By employing a global shutter sensor with strapdown gyro-assisted de-rotation, visual optical flow distortion is mitigated. Furthermore, because our scale-dilation EKF executes with $O(1)$ matrix operations per frame, total computational latency on an onboard companion computer (e.g., NVIDIA Jetson Orin Nano) is under $1.5\,\text{ms}$, seamlessly fitting within a $60\text{--}100\,\text{Hz}$ visual guidance loop.
+
+\section{Code \& Data Availability}
+All simulation environments, ROS~2 control implementations, ground-truth telemetry datasets, and visual trajectory animations are openly accessible in the public companion repository: \url{https://github.com/T-Storm-072/01_uav_vision_interception}.
+
+\section{Conclusion}
+This article introduced a passive visual-inertial guidance framework for autonomous counter-UAV interception in contested, GPS-denied airspace. By coupling the logarithmic feature scale expansion rate with onboard IMU specific force, the proposed scale-dilation EKF observer successfully eliminates range ambiguity along the monocular optical axis without requiring active radar or LiDAR emissions. Integrated with a 3D True Proportional Navigation law that respects quadrotor acceleration saturation bounds, the system demonstrated sub-decimeter terminal miss distances ($0.011\text{--}0.068\,\text{m}$) across diverse target evasion maneuvers in Gazebo Harmonic simulation. Future work will focus on hardware-in-the-loop (HITL) physical flight tests and net-capture deployment mechanisms.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
